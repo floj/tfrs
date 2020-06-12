@@ -11,6 +11,7 @@ import (
 
 	survey "github.com/AlecAivazis/survey/v2"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 func getRessources(dir string) []string {
@@ -98,10 +99,17 @@ func main() {
 	}
 
 	names := getRessources(".")
+
+	pageSize := len(names)
+	_, height, err := terminal.GetSize(int(os.Stdout.Fd()))
+	if err == nil && height < pageSize {
+		pageSize = height - 2
+	}
+
 	var question = []*survey.Question{{Prompt: &survey.MultiSelect{
 		Message:  "Choose ressources/modules:",
 		Options:  names,
-		PageSize: len(names),
+		PageSize: pageSize,
 	}}}
 
 	answers := []string{}
