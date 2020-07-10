@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	survey "github.com/AlecAivazis/survey/v2"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
@@ -88,13 +87,13 @@ func (c *Config) applyIcons(icons *survey.IconSet) {
 func main() {
 
 	if len(os.Args) < 2 {
-		fmt.Printf("Usage: %s <tf command> <opts>\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <tf command> <opts>\n\n", os.Args[0])
 		os.Exit(1)
 	}
 
 	conf, err := loadConfig()
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintf(os.Stderr, "%v", err)
 		os.Exit(1)
 	}
 
@@ -135,13 +134,14 @@ func main() {
 	{{- end}}`
 
 	if err := survey.Ask(question, &answers, survey.WithIcons(conf.applyIcons)); err != nil {
-		fmt.Println(err.Error())
+		fmt.Fprintf(os.Stderr, "%v", err)
 		os.Exit(1)
 	}
 	for i := range answers {
 		answers[i] = "-target=" + answers[i]
 	}
-	fmt.Println(strings.Join(answers, " "))
+
+	//fmt.Println(strings.Join(answers, " "))
 	var args []string
 	args = append(os.Args[1:])
 	args = append(args, answers...)
@@ -153,7 +153,7 @@ func main() {
 
 	fmt.Printf("> %s\n", cmd)
 	if err = cmd.Run(); err != nil {
-		fmt.Println(err)
+		fmt.Fprintf(os.Stderr, "%v", err)
 		os.Exit(1)
 	}
 }
