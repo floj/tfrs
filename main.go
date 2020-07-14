@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
+	"syscall"
 
 	survey "github.com/AlecAivazis/survey/v2"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
@@ -143,17 +145,18 @@ func main() {
 
 	//fmt.Println(strings.Join(answers, " "))
 	var args []string
-	args = append(os.Args[1:])
+	args = append(args, "terraform")
+	args = append(args, os.Args[1:]...)
 	args = append(args, answers...)
 
-	cmd := exec.Command("terraform", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	fmt.Printf("> %s\n", cmd)
-	if err = cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
+	fmt.Printf("> %s\n", strings.Join(args, " "))
+	bin, err := exec.LookPath(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not find %s in PATH: %v", args[0], err)
 		os.Exit(1)
 	}
+
+	err = syscall.Exec(bin, args, os.Environ())
+	fmt.Fprintf(os.Stderr, "%v", err)
+	os.Exit(1)
 }
