@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,12 +10,17 @@ import (
 	"strings"
 	"syscall"
 
-	survey "github.com/AlecAivazis/survey/v2"
+	"github.com/floj/tfrs/chooser"
+	"github.com/floj/tfrs/chooser/fuzzy"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
-	"golang.org/x/crypto/ssh/terminal"
+	"github.com/mattn/go-isatty"
 )
 
-func getRessources(dir string) []string {
+func getRessources(dir, prefix, modulesDir string, depth, maxDepth int) []string {
+	if depth > maxDepth {
+		return []string{}
+	}
+
 	module, diags := tfconfig.LoadModule(dir)
 	if diags.HasErrors() {
 		fmt.Fprintln(os.Stderr, diags)
@@ -23,12 +28,19 @@ func getRessources(dir string) []string {
 
 	modules := make([]string, 0, len(module.ModuleCalls))
 	for _, v := range module.ModuleCalls {
-		modules = append(modules, "module."+v.Name)
+		name := prefix + "module." + v.Name
+		modules = append(modules, name)
+		src := filepath.Join(dir, v.Source)
+		if v.Version != "" {
+			src = filepath.Join(modulesDir, strings.ReplaceAll(name, "module.", ""))
+		}
+		submodules := getRessources(src, name+".", modulesDir, depth+1, maxDepth)
+		modules = append(modules, submodules...)
 	}
 
 	ressources := make([]string, 0, len(module.ManagedResources))
 	for _, v := range module.ManagedResources {
-		ressources = append(ressources, v.Type+"."+v.Name)
+		ressources = append(ressources, prefix+v.Type+"."+v.Name)
 	}
 
 	sort.Strings(modules)
@@ -40,114 +52,47 @@ func getRessources(dir string) []string {
 	return names
 }
 
-func loadConfig() (Config, error) {
-	c := Config{}
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return c, fmt.Errorf("Could not detect config dir: %w", err)
-	}
-	path := filepath.Join(dir, "tfrs", "config.json")
-	f, err := os.Open(path)
-	if err != nil && os.IsNotExist(err) {
-		return c, nil
-	} else if err != nil {
-		return c, fmt.Errorf("Could not open config file %s: %w", path, err)
-	}
-	defer f.Close()
-
-	if err = json.NewDecoder(f).Decode(&c); err != nil {
-		return c, fmt.Errorf("Could not parse config file %s: %w", path, err)
-	}
-
-	return c, nil
-}
-
-type Config struct {
-	Input       survey.IconSet `json:"input"`
-	SpaceAdjust string         `json:"space_adjust"`
-}
-
-func applyIcon(source survey.Icon, dest *survey.Icon) {
-	if source.Text != "" {
-		dest.Text = source.Text
-	}
-	if source.Format != "" {
-		dest.Format = source.Format
-	}
-}
-
-func (c *Config) applyIcons(icons *survey.IconSet) {
-	applyIcon(c.Input.Error, &icons.Error)
-	applyIcon(c.Input.Help, &icons.Help)
-	applyIcon(c.Input.HelpInput, &icons.HelpInput)
-	applyIcon(c.Input.MarkedOption, &icons.MarkedOption)
-	applyIcon(c.Input.Question, &icons.Question)
-	applyIcon(c.Input.SelectFocus, &icons.SelectFocus)
-	applyIcon(c.Input.UnmarkedOption, &icons.UnmarkedOption)
-}
-
 func main() {
+	chdir := flag.String("chdir", ".", "lookup resources from this directory")
+	maxDepth := flag.Int("max-depth", 0, "how many levels to decent into submodules")
+	flag.Parse()
 
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <tf command> <opts>\n\n", os.Args[0])
+	if isatty.IsTerminal(os.Stdout.Fd()) && len(flag.Args()) < 1 {
+		fmt.Fprintf(os.Stderr, "If used in tty mode, at least one argument must be passed, eg: %s plan\n", os.Args[0])
 		os.Exit(1)
 	}
 
-	conf, err := loadConfig()
+	names := getRessources(*chdir, "", filepath.Join(*chdir, ".terraform/modules"), 0, *maxDepth)
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "No modules or resources found in %s\n", *chdir)
+		os.Exit(1)
+	}
+
+	var chooser chooser.Chooser
+	chooser = fuzzy.NewChooser()
+
+	ok, selected, err := chooser.Choose(names)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		os.Exit(1)
 	}
 
-	names := getRessources(".")
-
-	pageSize := len(names)
-	_, height, err := terminal.GetSize(int(os.Stdout.Fd()))
-	if err == nil && height < pageSize {
-		pageSize = height - 2
-	}
-
-	var question = []*survey.Question{{Prompt: &survey.MultiSelect{
-		Message:  "Choose ressources/modules:",
-		Options:  names,
-		PageSize: pageSize,
-	}}}
-
-	answers := []string{}
-	spaceAdjust := " "
-	if conf.SpaceAdjust != "" {
-		spaceAdjust = conf.SpaceAdjust
-	}
-
-	survey.MultiSelectQuestionTemplate = `
-	{{- if .ShowHelp }}{{- color .Config.Icons.Help.Format }}{{ .Config.Icons.Help.Text }} {{ .Help }}{{color "reset"}}{{"\n"}}{{end}}
-	{{- color .Config.Icons.Question.Format }}{{ .Config.Icons.Question.Text }} {{color "reset"}}
-	{{- color "default+hb"}}{{ .Message }}{{ .FilterMessage }}{{color "reset"}}
-	{{- if .ShowAnswer}}{{color "cyan"}} {{.Answer}}{{color "reset"}}{{"\n"}}
-	{{- else }}
-		{{- "  "}}{{- color "cyan"}}[Use arrows to move, space to select, type to filter{{- if and .Help (not .ShowHelp)}}, {{ .Config.HelpInput }} for more help{{end}}]{{color "reset"}}
-	  {{- "\n"}}
-	  {{- range $ix, $option := .PageEntries}}
-		{{- if eq $ix $.SelectedIndex }}{{color $.Config.Icons.SelectFocus.Format }}{{ $.Config.Icons.SelectFocus.Text }}{{color "reset"}}{{else}}` + spaceAdjust + `{{end}}
-		{{- if index $.Checked $option.Index }}{{color $.Config.Icons.MarkedOption.Format }} {{ $.Config.Icons.MarkedOption.Text }} {{else}}{{color $.Config.Icons.UnmarkedOption.Format }} {{ $.Config.Icons.UnmarkedOption.Text }} {{end}}
-		{{- color "reset"}}
-		{{- " "}}{{$option.Value}}{{"\n"}}
-	  {{- end}}
-	{{- end}}`
-
-	if err := survey.Ask(question, &answers, survey.WithIcons(conf.applyIcons)); err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
+	if !ok {
 		os.Exit(1)
 	}
-	for i := range answers {
-		answers[i] = "-target=" + answers[i]
+
+	for i := 0; i < len(selected); i++ {
+		selected[i] = "-target=" + selected[i]
+	}
+	if !isatty.IsTerminal(os.Stdout.Fd()) {
+		fmt.Println(strings.Join(selected, " "))
+		return
 	}
 
-	//fmt.Println(strings.Join(answers, " "))
 	var args []string
 	args = append(args, "terraform")
-	args = append(args, os.Args[1:]...)
-	args = append(args, answers...)
+	args = append(args, flag.Args()...)
+	args = append(args, selected...)
 
 	fmt.Printf("> %s\n", strings.Join(args, " "))
 	bin, err := exec.LookPath(args[0])
@@ -155,7 +100,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Could not find %s in PATH: %v", args[0], err)
 		os.Exit(1)
 	}
-
 	err = syscall.Exec(bin, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "%v", err)
 	os.Exit(1)
