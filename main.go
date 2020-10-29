@@ -16,6 +16,8 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
+const allMarker = "<all>"
+
 func getRessources(dir, prefix, modulesDir string, depth, maxDepth int) []string {
 	if depth > maxDepth {
 		return []string{}
@@ -62,11 +64,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	names := getRessources(*chdir, "", filepath.Join(*chdir, ".terraform/modules"), 0, *maxDepth)
-	if len(names) == 0 {
+	resources := getRessources(*chdir, "", filepath.Join(*chdir, ".terraform/modules"), 0, *maxDepth)
+	if len(resources) == 0 {
 		fmt.Fprintf(os.Stderr, "No modules or resources found in %s\n", *chdir)
 		os.Exit(1)
 	}
+
+	names := []string{allMarker}
+	names = append(names, resources...)
 
 	var chooser chooser.Chooser
 	chooser = fuzzy.NewChooser()
@@ -82,6 +87,10 @@ func main() {
 	}
 
 	for i := 0; i < len(selected); i++ {
+		if selected[i] == allMarker {
+			selected = []string{}
+			break
+		}
 		selected[i] = "-target=" + selected[i]
 	}
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
