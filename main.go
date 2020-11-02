@@ -33,7 +33,7 @@ func getRessources(dir, prefix, modulesDir string, depth, maxDepth int) []string
 		name := prefix + "module." + v.Name
 		modules = append(modules, name)
 		src := filepath.Join(dir, v.Source)
-		if !strings.HasPrefix(v.Source, "./") || !strings.HasPrefix(v.Source, "../") {
+		if !strings.HasPrefix(v.Source, "./") && !strings.HasPrefix(v.Source, "../") {
 			src = filepath.Join(modulesDir, strings.ReplaceAll(name, "module.", ""))
 		}
 		submodules := getRessources(src, name+".", modulesDir, depth+1, maxDepth)
