@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -18,7 +19,35 @@ import (
 
 const allMarker = "<all>"
 
-func getRessources(dir, prefix, modulesDir string, depth, maxDepth int) []string {
+type ModulesManifest struct {
+	BaseDir string
+	Modules []struct {
+		Key string
+		Dir string
+	}
+}
+
+func (mm *ModulesManifest) FindDir(key string) string {
+	for _, m := range mm.Modules {
+		if m.Key == key {
+			return filepath.Join(mm.BaseDir, m.Dir)
+		}
+	}
+	return ""
+}
+
+func loadManifest(path string) (*ModulesManifest, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var m ModulesManifest
+	err = json.NewDecoder(f).Decode(&m)
+	return &m, err
+}
+
+func getRessources(dir, prefix string, mm *ModulesManifest, depth, maxDepth int) []string {
 	if depth > maxDepth {
 		return []string{}
 	}
@@ -32,11 +61,15 @@ func getRessources(dir, prefix, modulesDir string, depth, maxDepth int) []string
 	for _, v := range module.ModuleCalls {
 		name := prefix + "module." + v.Name
 		modules = append(modules, name)
-		src := filepath.Join(dir, v.Source)
-		if !strings.HasPrefix(v.Source, "./") && !strings.HasPrefix(v.Source, "../") {
-			src = filepath.Join(modulesDir, strings.ReplaceAll(name, "module.", ""))
+
+		key := strings.ReplaceAll(name, "module.", "")
+		dir := mm.FindDir(key)
+		if dir == "" {
+			fmt.Fprintf(os.Stderr, "No source dir found for %s\n", key)
+			continue
 		}
-		submodules := getRessources(src, name+".", modulesDir, depth+1, maxDepth)
+
+		submodules := getRessources(dir, name+".", mm, depth+1, maxDepth)
 		modules = append(modules, submodules...)
 	}
 
@@ -64,7 +97,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	resources := getRessources(*chdir, "", filepath.Join(*chdir, ".terraform/modules"), 0, *maxDepth)
+	modulesBase := filepath.Join(*chdir, ".terraform/modules")
+	manifestPath := filepath.Join(modulesBase, "modules.json")
+	manifest, err := loadManifest(manifestPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not load terraform modules manifest %s: %v", manifestPath, err)
+		manifest = &ModulesManifest{}
+	}
+	manifest.BaseDir = *chdir
+	resources := getRessources(*chdir, "", manifest, 0, *maxDepth)
 	if len(resources) == 0 {
 		fmt.Fprintf(os.Stderr, "No modules or resources found in %s\n", *chdir)
 		os.Exit(1)
