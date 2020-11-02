@@ -33,7 +33,7 @@ func getRessources(dir, prefix, modulesDir string, depth, maxDepth int) []string
 		name := prefix + "module." + v.Name
 		modules = append(modules, name)
 		src := filepath.Join(dir, v.Source)
-		if v.Version != "" {
+		if !strings.HasPrefix(v.Source, "./") || !strings.HasPrefix(v.Source, "../") {
 			src = filepath.Join(modulesDir, strings.ReplaceAll(name, "module.", ""))
 		}
 		submodules := getRessources(src, name+".", modulesDir, depth+1, maxDepth)
@@ -56,7 +56,7 @@ func getRessources(dir, prefix, modulesDir string, depth, maxDepth int) []string
 
 func main() {
 	chdir := flag.String("chdir", ".", "lookup resources from this directory")
-	maxDepth := flag.Int("max-depth", 0, "how many levels to decent into submodules")
+	maxDepth := flag.Int("depth", 0, "how many levels to decent into submodules")
 	flag.Parse()
 
 	if isatty.IsTerminal(os.Stdout.Fd()) && len(flag.Args()) < 1 {
