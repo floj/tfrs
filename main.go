@@ -36,15 +36,20 @@ func (mm *ModulesManifest) FindDir(key string) string {
 	return ""
 }
 
-func loadManifest(path string) (*ModulesManifest, error) {
+func loadManifest(rootDir string) (*ModulesManifest, error) {
+	path := filepath.Join(rootDir, ".terraform/modules/modules.json")
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Could not load manifest file '%s': w%", err)
 	}
 	defer f.Close()
 	var m ModulesManifest
 	err = json.NewDecoder(f).Decode(&m)
-	return &m, err
+	if err != nil {
+		return nil, fmt.Errorf("Could not decode manifest file '%s': w%", err)
+	}
+	m.BaseDir = rootDir
+	return &m, nil
 }
 
 func getRessources(dir, prefix string, mm *ModulesManifest, depth, maxDepth int) []string {
@@ -97,14 +102,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	modulesBase := filepath.Join(*chdir, ".terraform/modules")
-	manifestPath := filepath.Join(modulesBase, "modules.json")
-	manifest, err := loadManifest(manifestPath)
+	manifest, err := loadManifest(*chdir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not load terraform modules manifest %s: %v", manifestPath, err)
+		fmt.Fprintln(os.Stderr, err)
 		manifest = &ModulesManifest{}
 	}
-	manifest.BaseDir = *chdir
 	resources := getRessources(*chdir, "", manifest, 0, *maxDepth)
 	if len(resources) == 0 {
 		fmt.Fprintf(os.Stderr, "No modules or resources found in %s\n", *chdir)
