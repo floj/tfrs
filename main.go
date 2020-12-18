@@ -40,13 +40,13 @@ func loadManifest(rootDir string) (*ModulesManifest, error) {
 	path := filepath.Join(rootDir, ".terraform/modules/modules.json")
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("Could not load manifest file '%s': w%", err)
+		return nil, fmt.Errorf("Could not load manifest file '%s': %w", path, err)
 	}
 	defer f.Close()
 	var m ModulesManifest
 	err = json.NewDecoder(f).Decode(&m)
 	if err != nil {
-		return nil, fmt.Errorf("Could not decode manifest file '%s': w%", err)
+		return nil, fmt.Errorf("Could not decode manifest file '%s': %w", path, err)
 	}
 	m.BaseDir = rootDir
 	return &m, nil
