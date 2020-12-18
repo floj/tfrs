@@ -93,11 +93,12 @@ func getRessources(dir, prefix string, mm *ModulesManifest, depth, maxDepth int)
 }
 
 func main() {
+	listOnly := flag.Bool("list", false, "just list the resources, one per line")
 	chdir := flag.String("chdir", ".", "lookup resources from this directory")
 	maxDepth := flag.Int("depth", 0, "how many levels to decent into submodules")
 	flag.Parse()
 
-	if isatty.IsTerminal(os.Stdout.Fd()) && len(flag.Args()) < 1 {
+	if !*listOnly && isatty.IsTerminal(os.Stdout.Fd()) && len(flag.Args()) < 1 {
 		fmt.Fprintf(os.Stderr, "If used in tty mode, at least one argument must be passed, eg: %s plan\n", os.Args[0])
 		os.Exit(1)
 	}
@@ -111,6 +112,13 @@ func main() {
 	if len(resources) == 0 {
 		fmt.Fprintf(os.Stderr, "No modules or resources found in %s\n", *chdir)
 		os.Exit(1)
+	}
+
+	if *listOnly {
+		for _, r := range resources {
+			fmt.Println(r)
+		}
+		os.Exit(0)
 	}
 
 	names := []string{allMarker}
