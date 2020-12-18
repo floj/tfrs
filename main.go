@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -92,6 +93,39 @@ func getRessources(dir, prefix string, mm *ModulesManifest, depth, maxDepth int)
 	return names
 }
 
+func hasFZF() bool {
+	path, err := exec.LookPath("fzf")
+	if err != nil {
+		return false
+	}
+	return path != ""
+}
+
+func pickRessources(names []string) ([]string, error) {
+	if hasFZF() {
+		var buf bytes.Buffer
+		cmd := exec.Command("fzf", "-m")
+		cmd.Stdin = strings.NewReader(strings.Join(names, "\n"))
+		cmd.Stdout = &buf
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		if err != nil {
+			return nil, err
+		}
+		return strings.Split(buf.String(), "\n"), nil
+	}
+	var chooser chooser.Chooser
+	chooser = fuzzy.NewChooser()
+	ok, selected, err := chooser.Choose(names)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("aborded")
+	}
+	return selected, err
+}
+
 func main() {
 	listOnly := flag.Bool("list", false, "just list the resources, one per line")
 	chdir := flag.String("chdir", ".", "lookup resources from this directory")
@@ -124,25 +158,22 @@ func main() {
 	names := []string{allMarker}
 	names = append(names, resources...)
 
-	var chooser chooser.Chooser
-	chooser = fuzzy.NewChooser()
-
-	ok, selected, err := chooser.Choose(names)
+	selected, err := pickRessources(names)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
-		os.Exit(1)
-	}
-
-	if !ok {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 
 	for i := 0; i < len(selected); i++ {
-		if selected[i] == allMarker {
+		s := strings.TrimSpace(selected[i])
+		if s == "" {
+			continue
+		}
+		if s == allMarker {
 			selected = []string{}
 			break
 		}
-		selected[i] = "-target=" + selected[i]
+		selected[i] = "-target=" + s
 	}
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		fmt.Println(strings.Join(selected, " "))
