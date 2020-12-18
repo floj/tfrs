@@ -101,6 +101,18 @@ func hasFZF() bool {
 	return path != ""
 }
 
+func normalize(a []string) []string {
+	n := make([]string, 0, len(a))
+	for _, e := range a {
+		s := strings.TrimSpace(e)
+		if s == "" {
+			continue
+		}
+		n = append(n, s)
+	}
+	return n
+}
+
 func pickRessources(names []string) ([]string, error) {
 	if hasFZF() {
 		var buf bytes.Buffer
@@ -163,17 +175,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
+	selected = normalize(selected)
 
 	for i := 0; i < len(selected); i++ {
-		s := strings.TrimSpace(selected[i])
-		if s == "" {
-			continue
-		}
-		if s == allMarker {
+		if selected[i] == allMarker {
 			selected = []string{}
 			break
 		}
-		selected[i] = "-target=" + s
+		selected[i] = "-target=" + selected[i]
 	}
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		fmt.Println(strings.Join(selected, " "))
