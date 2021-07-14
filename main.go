@@ -12,7 +12,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/floj/tfrs/chooser"
 	"github.com/floj/tfrs/chooser/fuzzy"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 	"github.com/mattn/go-isatty"
@@ -41,13 +40,13 @@ func loadManifest(rootDir string) (*ModulesManifest, error) {
 	path := filepath.Join(rootDir, ".terraform/modules/modules.json")
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("Could not load manifest file '%s': %w", path, err)
+		return nil, fmt.Errorf("could not load manifest file '%s': %w", path, err)
 	}
 	defer f.Close()
 	var m ModulesManifest
 	err = json.NewDecoder(f).Decode(&m)
 	if err != nil {
-		return nil, fmt.Errorf("Could not decode manifest file '%s': %w", path, err)
+		return nil, fmt.Errorf("could not decode manifest file '%s': %w", path, err)
 	}
 	m.BaseDir = rootDir
 	return &m, nil
@@ -126,8 +125,7 @@ func pickRessources(names []string) ([]string, error) {
 		}
 		return strings.Split(buf.String(), "\n"), nil
 	}
-	var chooser chooser.Chooser
-	chooser = fuzzy.NewChooser()
+	chooser := fuzzy.NewChooser()
 	ok, selected, err := chooser.Choose(names)
 	if err != nil {
 		return nil, err
