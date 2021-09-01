@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+
+	flag "github.com/spf13/pflag"
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 )
@@ -112,7 +113,7 @@ func normalize(a []string) []string {
 
 func pickRessources(names []string) ([]string, error) {
 	var buf bytes.Buffer
-	cmd := exec.Command("fzf", "-m", `--preview=tr ' ' '\n' <<< '{+}'|sort`)
+	cmd := exec.Command("fzf", "-m", "--cycle", fmt.Sprintf("--preview=%s --preview {+}", os.Args[0]))
 	cmd.Stdin = strings.NewReader(strings.Join(names, "\n"))
 	cmd.Stdout = &buf
 	cmd.Stderr = os.Stderr
@@ -123,13 +124,30 @@ func pickRessources(names []string) ([]string, error) {
 	return strings.Split(buf.String(), "\n"), nil
 }
 
+func printPreview(s []string) {
+	sorted := make([]string, len(s))
+	copy(sorted, s)
+	sort.Strings(sorted)
+	for _, e := range sorted {
+		fmt.Println(e)
+	}
+}
+
 func main() {
-	listOnly := flag.Bool("list", false, "just list the resources, one per line")
+	listOnly := flag.Bool("list", false, "just list the (prefixed) resources, one per line")
 	chdir := flag.String("chdir", ".", "lookup resources from this directory")
 	maxDepth := flag.Int("depth", 0, "how many levels to decent into submodules")
 	prefix := flag.String("prefix", "", "add as a prefix before each selected entry")
 	execCmd := flag.String("exec", "", "if set, executes the command using all args and passes the selected, prefixed resources")
+	preview := flag.Bool("preview", false, "used internally to create content of the preview window")
+	flag.CommandLine.MarkHidden("preview")
+
 	flag.Parse()
+
+	if *preview {
+		printPreview(flag.Args())
+		os.Exit(0)
+	}
 
 	if !hasFZF() {
 		fmt.Println("fzf not found in path, please install it. See https://github.com/junegunn/fzf")
