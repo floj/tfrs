@@ -12,9 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/floj/tfrs/chooser/fuzzy"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
-	"github.com/mattn/go-isatty"
 )
 
 const allMarker = "<all>"
@@ -113,38 +111,40 @@ func normalize(a []string) []string {
 }
 
 func pickRessources(names []string) ([]string, error) {
-	if hasFZF() {
-		var buf bytes.Buffer
-		cmd := exec.Command("fzf", "-m")
-		cmd.Stdin = strings.NewReader(strings.Join(names, "\n"))
-		cmd.Stdout = &buf
-		cmd.Stderr = os.Stderr
-		err := cmd.Run()
-		if err != nil {
-			return nil, err
-		}
-		return strings.Split(buf.String(), "\n"), nil
-	}
-	chooser := fuzzy.NewChooser()
-	ok, selected, err := chooser.Choose(names)
+	var buf bytes.Buffer
+	cmd := exec.Command("fzf", "-m", `--preview=tr ' ' '\n' <<< '{+}'|sort`)
+	cmd.Stdin = strings.NewReader(strings.Join(names, "\n"))
+	cmd.Stdout = &buf
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, fmt.Errorf("aborded")
-	}
-	return selected, err
+	return strings.Split(buf.String(), "\n"), nil
 }
 
 func main() {
 	listOnly := flag.Bool("list", false, "just list the resources, one per line")
 	chdir := flag.String("chdir", ".", "lookup resources from this directory")
 	maxDepth := flag.Int("depth", 0, "how many levels to decent into submodules")
+	prefix := flag.String("prefix", "", "add as a prefix before each selected entry")
+	execCmd := flag.String("exec", "", "if set, executes the command using all args and passes the selected, prefixed resources")
 	flag.Parse()
 
-	if !*listOnly && isatty.IsTerminal(os.Stdout.Fd()) && len(flag.Args()) < 1 {
-		fmt.Fprintf(os.Stderr, "If used in tty mode, at least one argument must be passed, eg: %s plan\n", os.Args[0])
+	if !hasFZF() {
+		fmt.Println("fzf not found in path, please install it. See https://github.com/junegunn/fzf")
 		os.Exit(1)
+	}
+
+	var err error
+	bin := ""
+
+	if *execCmd != "" {
+		bin, err = exec.LookPath(*execCmd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Could not find %s in PATH: %v", *execCmd, err)
+			os.Exit(1)
+		}
 	}
 
 	manifest, err := loadManifest(*chdir)
@@ -160,7 +160,7 @@ func main() {
 
 	if *listOnly {
 		for _, r := range resources {
-			fmt.Println(r)
+			fmt.Printf("%s%s\n", *prefix, r)
 		}
 		os.Exit(0)
 	}
@@ -180,24 +180,20 @@ func main() {
 			selected = []string{}
 			break
 		}
-		selected[i] = "-target=" + selected[i]
+		selected[i] = fmt.Sprintf("%s%s", *prefix, selected[i])
 	}
-	if !isatty.IsTerminal(os.Stdout.Fd()) {
+
+	if *execCmd == "" {
 		fmt.Println(strings.Join(selected, " "))
 		return
 	}
 
 	var args []string
-	args = append(args, "terraform")
+	args = append(args, *execCmd)
 	args = append(args, flag.Args()...)
 	args = append(args, selected...)
 
 	fmt.Printf("> %s\n", strings.Join(args, " "))
-	bin, err := exec.LookPath(args[0])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not find %s in PATH: %v", args[0], err)
-		os.Exit(1)
-	}
 	err = syscall.Exec(bin, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "%v", err)
 	os.Exit(1)
