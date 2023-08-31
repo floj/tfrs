@@ -13,8 +13,7 @@ builds:
       - arm64
     flags:
       - -trimpath
-    ldflags:
-      - -s -w
+    # use default ldflags
 
 archives:
   - format_overrides:
