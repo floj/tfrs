@@ -18,6 +18,12 @@ import (
 
 const allMarker = "<all>"
 
+var (
+	version = "dev"
+	commit  = "-"
+	date    = "-"
+)
+
 type ModulesManifest struct {
 	BaseDir string
 	Modules []struct {
@@ -141,8 +147,13 @@ func main() {
 	execCmd := flag.String("exec", "", "if set, executes the command using all args and passes the selected, prefixed resources")
 	preview := flag.Bool("preview", false, "used internally to create content of the preview window")
 	flag.CommandLine.MarkHidden("preview")
-
+	showVer := flag.Bool("version", false, "print version information")
 	flag.Parse()
+
+	if *showVer {
+		fmt.Printf("tfrs %s (commit %s, built at %s)", version, commit, date)
+		os.Exit(0)
+	}
 
 	if *preview {
 		printPreview(flag.Args())
