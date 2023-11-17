@@ -255,12 +255,18 @@ func getResources(useState bool, dir string, maxDepth int) ([]string, error) {
 
 func getResourcesFromState(dir string, maxDepth int) ([]string, error) {
 	buf := bytes.Buffer{}
-	cmd := exec.Command("terraform", "state", "list")
+
+	tfBin, err := exec.LookPath("terraform")
+	if err != nil {
+		return nil, fmt.Errorf("could not find terraform: %w", err)
+	}
+	cmd := exec.Command(tfBin, "-chdir="+dir, "state", "list")
 	cmd.Dir = dir
 	cmd.Stdout = &buf
-	err := cmd.Run()
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("could not get terraform state: %e", err)
+		return nil, fmt.Errorf("could not get terraform state: %w", err)
 	}
 	lines := strings.Split(buf.String(), "\n")
 
@@ -294,11 +300,12 @@ func getResourcesFromState(dir string, maxDepth int) ([]string, error) {
 	// or chains of it like
 	// module.<myname>.<module>.<myname>.<resource>.<myname>
 	for i := range lines {
-		depth := (strings.Count(lines[i], ".") / 2) + 1
+		depth := (strings.Count(lines[i], ".") / 2)
 		if depth > maxDepth {
 			lines[i] = ""
 		}
 	}
+
 	return lines, nil
 }
 
