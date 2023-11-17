@@ -57,7 +57,7 @@ func loadManifest(rootDir string) (*ModulesManifest, error) {
 	return &m, nil
 }
 
-func getRessources(dir, prefix string, mm *ModulesManifest, depth, maxDepth int) []string {
+func getResourcesFromManifest(dir, prefix string, mm *ModulesManifest, depth, maxDepth int) []string {
 	if depth > maxDepth {
 		return []string{}
 	}
@@ -79,7 +79,7 @@ func getRessources(dir, prefix string, mm *ModulesManifest, depth, maxDepth int)
 			continue
 		}
 
-		submodules := getRessources(dir, name+".", mm, depth+1, maxDepth)
+		submodules := getResourcesFromManifest(dir, name+".", mm, depth+1, maxDepth)
 		modules = append(modules, submodules...)
 	}
 
@@ -118,9 +118,16 @@ func normalize(a []string) []string {
 }
 
 func pickRessources(names []string) ([]string, error) {
-	var buf bytes.Buffer
+	in := bytes.Buffer{}
+	in.WriteString(allMarker)
+	for _, n := range names {
+		in.WriteByte('\n')
+		in.WriteString(n)
+	}
+
+	buf := bytes.Buffer{}
 	cmd := exec.Command("fzf", "-m", "--cycle", fmt.Sprintf("--preview=%s --preview {+}", os.Args[0]))
-	cmd.Stdin = strings.NewReader(strings.Join(names, "\n"))
+	cmd.Stdin = &in
 	cmd.Stdout = &buf
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -146,6 +153,8 @@ func main() {
 	prefix := flag.String("prefix", "", "add as a prefix before each selected entry")
 	execCmd := flag.String("exec", "", "if set, executes the command using all args and passes the selected, prefixed resources")
 	preview := flag.Bool("preview", false, "used internally to create content of the preview window")
+	useTfState := flag.Bool("use-state", false, "use `terraform state list` to determine the available resources")
+
 	flag.CommandLine.MarkHidden("preview")
 	showVer := flag.Bool("version", false, "print version information")
 	flag.Parse()
@@ -176,12 +185,14 @@ func main() {
 		}
 	}
 
-	manifest, err := loadManifest(*chdir)
+	resources, err := getResources(*useTfState, *chdir, *maxDepth)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		manifest = &ModulesManifest{}
+		fmt.Fprintf(os.Stderr, "Could not load resources: %v", err)
+		os.Exit(1)
 	}
-	resources := getRessources(*chdir, "", manifest, 0, *maxDepth)
+
+	resources = cleanupList(resources)
+
 	if len(resources) == 0 {
 		fmt.Fprintf(os.Stderr, "No modules or resources found in %s\n", *chdir)
 		os.Exit(1)
@@ -194,10 +205,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	names := []string{allMarker}
-	names = append(names, resources...)
-
-	selected, err := pickRessources(names)
+	selected, err := pickRessources(resources)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
@@ -226,4 +234,83 @@ func main() {
 	err = syscall.Exec(bin, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "%v", err)
 	os.Exit(1)
+}
+
+func getResources(useState bool, dir string, maxDepth int) ([]string, error) {
+	if useState {
+		resources, err := getResourcesFromState(dir, maxDepth)
+		return resources, err
+
+	}
+
+	manifest, err := loadManifest(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		manifest = &ModulesManifest{}
+	}
+	resources := getResourcesFromManifest(dir, "", manifest, 0, maxDepth)
+	return resources, nil
+
+}
+
+func getResourcesFromState(dir string, maxDepth int) ([]string, error) {
+	buf := bytes.Buffer{}
+	cmd := exec.Command("terraform", "state", "list")
+	cmd.Dir = dir
+	cmd.Stdout = &buf
+	err := cmd.Run()
+	if err != nil {
+		return nil, fmt.Errorf("could not get terraform state: %e", err)
+	}
+	lines := strings.Split(buf.String(), "\n")
+
+	// extract modules from all lines
+	modules := map[string]bool{}
+	for _, l := range lines {
+		parts := strings.Split(l, ".")
+		path := []string{}
+		for i := 0; i < len(parts); i = i + 2 {
+			if !strings.HasPrefix(parts[i], "module") {
+				continue
+			}
+			if len(parts) < i+1 {
+				continue
+			}
+			path = append(path, parts[i], parts[i+1])
+			modules[strings.Join(path, ".")] = true
+		}
+	}
+
+	// append modules to lines
+	for m := range modules {
+		lines = append(lines, m)
+	}
+
+	// filter by depth
+	// name is either:
+	// module.<myname>
+	// data.<myname>
+	// <resource>.<myname>
+	// or chains of it like
+	// module.<myname>.<module>.<myname>.<resource>.<myname>
+	for i := range lines {
+		depth := (strings.Count(lines[i], ".") / 2) + 1
+		if depth > maxDepth {
+			lines[i] = ""
+		}
+	}
+	return lines, nil
+}
+
+func cleanupList(s []string) []string {
+	n := make([]string, 0, len(s))
+	for _, e := range s {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		n = append(n, e)
+	}
+	sort.Strings(n)
+	return n
 }
