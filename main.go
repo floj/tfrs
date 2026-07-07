@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -45,6 +47,9 @@ func loadManifest(rootDir string) (*ModulesManifest, error) {
 	path := filepath.Join(rootDir, ".terraform/modules/modules.json")
 	f, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("could not load manifest file '%s': %w", path, err)
 	}
 	defer f.Close()
@@ -117,6 +122,42 @@ func normalize(a []string) []string {
 	return n
 }
 
+func getEnv(key string, defaultValue string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		return defaultValue
+	}
+	i, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return i
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		return defaultValue
+	}
+	// check truthyness
+	lower := strings.ToLower(value)
+	if lower == "true" || lower == "1" || lower == "yes" {
+		return true
+	}
+	if lower == "false" || lower == "0" || lower == "no" {
+		return false
+	}
+	return defaultValue
+}
+
 func pickRessources(names []string) ([]string, error) {
 	in := bytes.Buffer{}
 	in.WriteString(allMarker)
@@ -147,13 +188,14 @@ func printPreview(s []string) {
 }
 
 func main() {
-	listOnly := flag.Bool("list", false, "just list the (prefixed) resources, one per line")
-	chdir := flag.String("chdir", ".", "lookup resources from this directory")
-	maxDepth := flag.Int("depth", 0, "how many levels to decent into submodules")
-	prefix := flag.String("prefix", "", "add as a prefix before each selected entry")
-	execCmd := flag.String("exec", "", "if set, executes the command using all args and passes the selected, prefixed resources")
-	preview := flag.Bool("preview", false, "used internally to create content of the preview window")
-	useTfState := flag.Bool("use-state", false, "use `terraform state list` to determine the available resources")
+	listOnly := flag.Bool("list", getEnvBool("TFRS_LIST_ONLY", false), "just list the (prefixed) resources, one per line")
+	chdir := flag.String("chdir", getEnv("TFRS_CHDIR", "."), "lookup resources from this directory")
+	tfBin := flag.String("tf-bin", getEnv("TFRS_TF_BIN", "terraform"), "path to the terraform/open tofu binary")
+	maxDepth := flag.Int("depth", getEnvInt("TFRS_MAX_DEPTH", 0), "how many levels to decent into submodules")
+	prefix := flag.String("prefix", getEnv("TFRS_PREFIX", ""), "add as a prefix before each selected entry")
+	execCmd := flag.String("exec", getEnv("TFRS_EXEC_CMD", ""), "if set, executes the command using all args and passes the selected, prefixed resources")
+	preview := flag.Bool("preview", getEnvBool("TFRS_PREVIEW", false), "used internally to create content of the preview window")
+	useTfState := flag.Bool("use-state", getEnvBool("TFRS_USE_STATE", false), "use `terraform state list` to determine the available resources")
 
 	flag.CommandLine.MarkHidden("preview")
 	showVer := flag.Bool("version", false, "print version information")
@@ -185,7 +227,7 @@ func main() {
 		}
 	}
 
-	resources, err := getResources(*useTfState, *chdir, *maxDepth)
+	resources, err := getResources(*useTfState, *chdir, *maxDepth, *tfBin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not load resources: %v", err)
 		os.Exit(1)
@@ -236,9 +278,9 @@ func main() {
 	os.Exit(1)
 }
 
-func getResources(useState bool, dir string, maxDepth int) ([]string, error) {
+func getResources(useState bool, dir string, maxDepth int, tfBin string) ([]string, error) {
 	if useState {
-		resources, err := getResourcesFromState(dir, maxDepth)
+		resources, err := getResourcesFromState(dir, maxDepth, tfBin)
 		return resources, err
 
 	}
@@ -246,6 +288,8 @@ func getResources(useState bool, dir string, maxDepth int) ([]string, error) {
 	manifest, err := loadManifest(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+	}
+	if manifest == nil {
 		manifest = &ModulesManifest{}
 	}
 	resources := getResourcesFromManifest(dir, "", manifest, 0, maxDepth)
@@ -253,14 +297,14 @@ func getResources(useState bool, dir string, maxDepth int) ([]string, error) {
 
 }
 
-func getResourcesFromState(dir string, maxDepth int) ([]string, error) {
+func getResourcesFromState(dir string, maxDepth int, tfBin string) ([]string, error) {
 	buf := bytes.Buffer{}
 
-	tfBin, err := exec.LookPath("terraform")
+	tfBinPath, err := exec.LookPath(tfBin)
 	if err != nil {
-		return nil, fmt.Errorf("could not find terraform: %w", err)
+		return nil, fmt.Errorf("could not find %s: %w", tfBin, err)
 	}
-	cmd := exec.Command(tfBin, "-chdir="+dir, "state", "list")
+	cmd := exec.Command(tfBinPath, "-chdir="+dir, "state", "list")
 	cmd.Dir = dir
 	cmd.Stdout = &buf
 	cmd.Stderr = os.Stderr
@@ -300,7 +344,7 @@ func getResourcesFromState(dir string, maxDepth int) ([]string, error) {
 	// or chains of it like
 	// module.<myname>.<module>.<myname>.<resource>.<myname>
 	for i := range lines {
-		depth := (strings.Count(lines[i], ".") / 2)
+		depth := strings.Count(lines[i], ".") / 2
 		if depth > maxDepth {
 			lines[i] = ""
 		}
