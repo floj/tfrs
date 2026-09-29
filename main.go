@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	flag "github.com/spf13/pflag"
 
@@ -88,16 +87,16 @@ func getResourcesFromManifest(dir, prefix string, mm *ModulesManifest, depth, ma
 		modules = append(modules, submodules...)
 	}
 
-	ressources := make([]string, 0, len(module.ManagedResources))
+	resources := make([]string, 0, len(module.ManagedResources))
 	for _, v := range module.ManagedResources {
-		ressources = append(ressources, prefix+v.Type+"."+v.Name)
+		resources = append(resources, prefix+v.Type+"."+v.Name)
 	}
 
 	sort.Strings(modules)
-	sort.Strings(ressources)
+	sort.Strings(resources)
 
-	names := make([]string, 0, len(modules)+len(ressources))
-	names = append(names, ressources...)
+	names := make([]string, 0, len(modules)+len(resources))
+	names = append(names, resources...)
 	names = append(names, modules...)
 	return names
 }
@@ -158,7 +157,10 @@ func getEnvBool(key string, defaultValue bool) bool {
 	return defaultValue
 }
 
-func pickRessources(names []string) ([]string, error) {
+// errCancelled indicates the user aborted the fzf selection (e.g. Esc or Ctrl-C).
+var errCancelled = errors.New("selection cancelled")
+
+func pickResources(names []string) ([]string, error) {
 	in := bytes.Buffer{}
 	in.WriteString(allMarker)
 	for _, n := range names {
@@ -173,6 +175,15 @@ func pickRessources(names []string) ([]string, error) {
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	if err != nil {
+		// fzf exits with 130 when the user cancels (Esc/Ctrl-C) and 1 when
+		// there is no match/selection. Treat both as a clean cancellation.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			switch exitErr.ExitCode() {
+			case 1, 130:
+				return nil, errCancelled
+			}
+		}
 		return nil, err
 	}
 	return strings.Split(buf.String(), "\n"), nil
@@ -191,7 +202,7 @@ func main() {
 	listOnly := flag.Bool("list", getEnvBool("TFRS_LIST_ONLY", false), "just list the (prefixed) resources, one per line")
 	chdir := flag.String("chdir", getEnv("TFRS_CHDIR", "."), "lookup resources from this directory")
 	tfBin := flag.String("tf-bin", getEnv("TFRS_TF_BIN", "terraform"), "path to the terraform/open tofu binary")
-	maxDepth := flag.Int("depth", getEnvInt("TFRS_MAX_DEPTH", 0), "how many levels to decent into submodules")
+	maxDepth := flag.Int("depth", getEnvInt("TFRS_MAX_DEPTH", 0), "how many levels to descend into submodules")
 	prefix := flag.String("prefix", getEnv("TFRS_PREFIX", ""), "add as a prefix before each selected entry")
 	execCmd := flag.String("exec", getEnv("TFRS_EXEC_CMD", ""), "if set, executes the command using all args and passes the selected, prefixed resources")
 	preview := flag.Bool("preview", getEnvBool("TFRS_PREVIEW", false), "used internally to create content of the preview window")
@@ -247,8 +258,11 @@ func main() {
 		os.Exit(0)
 	}
 
-	selected, err := pickRessources(resources)
+	selected, err := pickResources(resources)
 	if err != nil {
+		if errors.Is(err, errCancelled) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
@@ -273,7 +287,7 @@ func main() {
 	args = append(args, selected...)
 
 	fmt.Printf("> %s\n", strings.Join(args, " "))
-	err = syscall.Exec(bin, args, os.Environ())
+	err = execProcess(bin, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "%v", err)
 	os.Exit(1)
 }
@@ -305,14 +319,20 @@ func getResourcesFromState(dir string, maxDepth int, tfBin string) ([]string, er
 		return nil, fmt.Errorf("could not find %s: %w", tfBin, err)
 	}
 	cmd := exec.Command(tfBinPath, "-chdir="+dir, "state", "list")
-	cmd.Dir = dir
 	cmd.Stdout = &buf
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
 	if err != nil {
 		return nil, fmt.Errorf("could not get terraform state: %w", err)
 	}
-	lines := strings.Split(buf.String(), "\n")
+	return parseStateList(buf.String(), maxDepth), nil
+}
+
+// parseStateList turns the output of `terraform state list` into the list of
+// selectable targets: every resource plus every (sub)module encountered along
+// the way, filtered by maxDepth.
+func parseStateList(output string, maxDepth int) []string {
+	lines := strings.Split(output, "\n")
 
 	// extract modules from all lines
 	modules := map[string]bool{}
@@ -323,7 +343,7 @@ func getResourcesFromState(dir string, maxDepth int, tfBin string) ([]string, er
 			if !strings.HasPrefix(parts[i], "module") {
 				continue
 			}
-			if len(parts) < i+1 {
+			if i+1 >= len(parts) {
 				continue
 			}
 			path = append(path, parts[i], parts[i+1])
@@ -350,7 +370,7 @@ func getResourcesFromState(dir string, maxDepth int, tfBin string) ([]string, er
 		}
 	}
 
-	return lines, nil
+	return lines
 }
 
 func cleanupList(s []string) []string {
